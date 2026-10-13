@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="pt-PT">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Agenda</title>
+<meta name="theme-color" content="#141a4f">
+<meta name="robots" content="noindex,nofollow">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+  :root{--day:#ff9f59;--night:#141a4f;--gold:#ffe08a;--err:#ff8a8a}
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#fff;
+    background:linear-gradient(135deg,#ffd86b 0%,var(--day) 49.9%,#2b2f86 50.1%,#0b1033 100%);
+    display:grid;place-items:center;padding:24px}
+  main{background:rgba(11,16,51,.85);border-radius:24px;padding:28px 24px;max-width:380px;width:100%;text-align:center;
+    box-shadow:0 20px 50px rgba(0,0,0,.35);backdrop-filter:blur(6px)}
+  img{width:104px;height:104px;border-radius:24px;display:block;margin:0 auto 14px}
+  h1{font-size:23px;margin:0 0 4px;letter-spacing:-.01em}
+  p{margin:0 0 16px;opacity:.85;font-size:15px;line-height:1.45}
+  code{font-family:ui-monospace,monospace;color:var(--gold)}
+  form{display:flex;flex-direction:column;gap:10px;text-align:left}
+  label{font-size:12px;opacity:.8;font-family:ui-monospace,monospace}
+  input,textarea{width:100%;font:inherit;font-size:16px;color:#fff;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.28);border-radius:12px;padding:12px 14px}
+  textarea{font-family:ui-monospace,monospace;font-size:12px;height:120px;resize:vertical}
+  input:focus,textarea:focus,button:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+  button{font:inherit;font-weight:700;border-radius:12px;padding:12px 14px;cursor:pointer;border:0;background:var(--gold);color:var(--night);font-size:16px}
+  button.ghost{background:transparent;color:#fff;border:1px solid rgba(255,255,255,.35);font-weight:600}
+  .row{display:flex;align-items:center;gap:8px;font-size:14px;opacity:.9}
+  .row input{width:auto}
+  .err{color:var(--err);font-size:14px;min-height:1.2em;margin:0}
+  small{display:block;margin-top:14px;opacity:.7;font-size:13px;line-height:1.4}
+  ol{text-align:left;padding-left:20px;margin:0 0 12px;font-size:14px;line-height:1.5;opacity:.9}
+</style>
+</head>
+<body>
+<main>
+  <img src="icon-512.png" alt="">
+  <h1>Agenda</h1>
+
+  <!-- Entrar -->
+  <section id="v-lock" hidden>
+    <p><code>&gt;_</code> palavra-passe para entrar</p>
+    <form id="f-lock">
+      <input type="password" id="pw" autocomplete="current-password" placeholder="Palavra-passe" required>
+      <label class="row"><input type="checkbox" id="remember"> Lembrar neste dispositivo</label>
+      <p class="err" id="lock-err"></p>
+      <button type="submit" id="btn-enter">Entrar</button>
+    </form>
+    <button class="ghost" id="install" hidden style="margin-top:10px;width:100%">Instalar no ecrã principal</button>
+    <small id="hint"></small>
+  </section>
+
+  <!-- Configurar (só aparece enquanto config.js tiver null) -->
+  <section id="v-setup" hidden>
+    <p>Primeira configuração. Isto só corre no teu dispositivo: a palavra-passe e o link nunca saem daqui.</p>
+    <form id="f-setup">
+      <label for="s-url">link da agenda</label>
+      <input type="url" id="s-url" placeholder="https://claude.ai/artifact/…" required>
+      <label for="s-pw">nova palavra-passe</label>
+      <input type="password" id="s-pw" autocomplete="new-password" minlength="6" required>
+      <label for="s-pw2">repetir palavra-passe</label>
+      <input type="password" id="s-pw2" autocomplete="new-password" minlength="6" required>
+      <p class="err" id="setup-err"></p>
+      <button type="submit">Gerar cofre</button>
+    </form>
+  </section>
+
+  <section id="v-out" hidden>
+    <p>Cofre criado. Falta um passo no GitHub:</p>
+    <ol>
+      <li>Abre o ficheiro <code>config.js</code> no repositório e toca no lápis (Edit).</li>
+      <li>Apaga tudo e cola o texto abaixo.</li>
+      <li><b>Commit changes</b>. Em 1–2 minutos a página passa a pedir a palavra-passe.</li>
+    </ol>
+    <textarea id="out" readonly></textarea>
+    <button id="copy" style="margin-top:10px;width:100%">Copiar texto</button>
+  </section>
+</main>
+
+<script src="config.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+  const ITER = 250000;
+  const KEY = "agenda-url";
+
+  async function deriveKey(pw, salt){
+    const base = await crypto.subtle.importKey("raw", enc.encode(pw), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey({name:"PBKDF2", salt, iterations:ITER, hash:"SHA-256"}, base, {name:"AES-GCM", length:256}, false, ["encrypt","decrypt"]);
+  }
+  async function lock(url, pw){
+    const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({name:"AES-GCM", iv}, await deriveKey(pw, salt), enc.encode(url));
+    return {v:1, s:b64(salt), i:b64(iv), c:b64(ct)};
+  }
+  async function unlock(box, pw){
+    const pt = await crypto.subtle.decrypt({name:"AES-GCM", iv:unb64(box.i)}, await deriveKey(pw, unb64(box.s)), unb64(box.c));
+    return dec.decode(pt);
+  }
+  const go = url => location.replace(url);
+
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+
+  // ---------- configuração ----------
+  if (!window.AGENDA_LOCK) {
+    $("v-setup").hidden = false;
+    $("f-setup").addEventListener("submit", async e => {
+      e.preventDefault();
+      const url = $("s-url").value.trim(), p1 = $("s-pw").value, p2 = $("s-pw2").value;
+      if (!/^https:\/\/claude\.ai\//.test(url)) { $("setup-err").textContent = "O link tem de começar por https://claude.ai/"; return; }
+      if (p1 !== p2) { $("setup-err").textContent = "As palavras-passe não são iguais."; return; }
+      $("setup-err").textContent = "A gerar…";
+      const box = await lock(url, p1);
+      $("out").value = "window.AGENDA_LOCK = " + JSON.stringify(box) + ";\n";
+      $("v-setup").hidden = true; $("v-out").hidden = false;
+    });
+    $("copy").addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText($("out").value); $("copy").textContent = "Copiado"; }
+      catch { $("out").select(); $("copy").textContent = "Seleciona e copia à mão"; }
+    });
+    return;
+  }
+
+  // ---------- entrar ----------
+  try { const saved = localStorage.getItem(KEY); if (saved) { go(saved); return; } } catch {}
+  $("v-lock").hidden = false;
+  $("pw").focus();
+  $("f-lock").addEventListener("submit", async e => {
+    e.preventDefault();
+    $("btn-enter").disabled = true; $("lock-err").textContent = "";
+    try {
+      const url = await unlock(window.AGENDA_LOCK, $("pw").value);
+      if ($("remember").checked) { try { localStorage.setItem(KEY, url); } catch {} }
+      go(url);
+    } catch {
+      $("lock-err").textContent = "Palavra-passe errada.";
+      $("pw").select();
+    }
+    $("btn-enter").disabled = false;
+  });
+
+  // instalar (só no navegador, não na app já instalada)
+  const standalone = matchMedia("(display-mode: standalone)").matches;
+  if (!standalone) {
+    $("hint").textContent = "Para o ícone no ecrã principal: menu ⋮ do Chrome → Instalar app.";
+    let promptEvent = null;
+    addEventListener("beforeinstallprompt", e => { e.preventDefault(); promptEvent = e; $("install").hidden = false; });
+    $("install").addEventListener("click", async () => { if (!promptEvent) return; promptEvent.prompt(); await promptEvent.userChoice; promptEvent = null; $("install").hidden = true; });
+  }
+})();
+</script>
+</body>
+</html>
